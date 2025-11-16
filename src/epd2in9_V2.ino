@@ -59,7 +59,7 @@ void setup() {
 
   if(!bms.Init() || !bms.update()){
     Serial.println("BMS not connected");
-    return;
+    //return;
   }
 
   if (epd.Init() != 0) {
@@ -71,16 +71,19 @@ void setup() {
 }
 
 void loop(){
-  if (!bms.update()){
+  while (!bms.update()){
     bms_data_drop_number++;
+    Serial.println("BMS connection drop");
     if (bms_data_drop_number > MAX_NUMBER_OF_DATA_LOSS){
       digitalWrite(RELAY_PIN, LOW);
       Serial.println("BMS connection error");
+      delay(100);
       return;
-    }
-  } else {
-    bms_data_drop_number = 0;
-  }
+      // bms connection error, vals cannot be trusted!
+    }}
+  //} else {
+  //  bms_data_drop_number = 0;
+  //}
 
   sprintf(curr_string, "%d A", round(bms.get.packCurrent));
   sprintf(soc_string, "%d %%", round(bms.get.packSOC));
@@ -120,7 +123,7 @@ void loop(){
     Serial.println("Cell voltage:      " + (String)bms.get.cellVmV[i]);
   }
 
-  if ((bms.get.minCellmV < MIN_CELL_MV) || (bms.get.packSOC < 10))
+  if ((bms.get.minCellmV < MIN_CELL_MV) || (bms.get.packSOC < MIN_SOC))
   {
     digitalWrite(RELAY_PIN, LOW);
     Serial.println("Empty");
