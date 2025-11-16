@@ -26,13 +26,8 @@ Daly_BMS_UART bms(BMS_SERIAL);
 #define HEIGHT 127
 #define WIDTH 255
 
-/**
-  * Due to RAM not enough in Arduino UNO, a frame buffer is not allowed.
-  * In this case, a smaller image buffer is allocated and you have to 
-  * update a partial display several times.
-  * 1 byte = 8 pixels, therefore you have to set 8*N pixels at a time.
-  */
-byte bms_data_drop_number = 0;
+
+byte bms_data_drop_number;
 unsigned char image[1024];
 Paint paint(image, 0, 0);    // width should be the multiple of 8 
 Epd epd;
@@ -50,37 +45,49 @@ char max_volt_string[10];
 char volt_diff[10];
 
 void setup() {
+  bms_data_drop_number = 0;
   Serial.begin(115200);
-  Serial.println("Startup");
+  Serial.println("Setup");
 
   pinMode(RELAY_PIN, OUTPUT);
   digitalWrite(RELAY_PIN, LOW);
   delay(1000);
 
-  if(!bms.Init() || !bms.update()){
+  while(!bms.Init()){
     Serial.println("BMS not connected");
-    //return;
+    delay(100);
+  }
+  while(!bms.update()){
+    Serial.println("BMS not connected");
+    delay(100);
   }
 
-  if (epd.Init() != 0) {
+  while(epd.Init() != 0) {
     Serial.print("e-Paper init failed");
-    return;
+    delay(100);
   }
   epd.ClearFrameMemory(0xFF);   // bit set = white, bit reset = black
   epd.DisplayFrame();
+  Serial.println("Setup complete");
 }
 
 void loop(){
+  //get update from the BMS
   while (!bms.update()){
     bms_data_drop_number++;
     Serial.println("BMS connection drop");
+
     if (bms_data_drop_number > MAX_NUMBER_OF_DATA_LOSS){
+      // Turn off the relay, when the connection was dropped to often
       digitalWrite(RELAY_PIN, LOW);
       Serial.println("BMS connection error");
       delay(100);
+
       return;
       // bms connection error, vals cannot be trusted!
-    }}
+      // TODO deal with problematic vals and try to reconnect or shut down
+    }
+  }
   //} else {
   //  bms_data_drop_number = 0;
   //}
@@ -118,10 +125,10 @@ void loop(){
   Serial.println("Charge MOSFet Status:        " + (String)bms.get.chargeFetState);
   Serial.println("Remaining Capacity mAh:      " + (String)bms.get.resCapacitymAh);
 
-  for (size_t i = 0; i < size_t(bms.get.numberOfCells); i++)
-  {
-    Serial.println("Cell voltage:      " + (String)bms.get.cellVmV[i]);
-  }
+  //for (size_t i = 0; i < size_t(bms.get.numberOfCells); i++)
+  //{
+  //  Serial.println("Cell voltage:      " + (String)bms.get.cellVmV[i]);
+  //}
 
   if ((bms.get.minCellmV < MIN_CELL_MV) || (bms.get.packSOC < MIN_SOC))
   {
@@ -139,9 +146,9 @@ void loop(){
       delay(100);
     }
   }
+
   //Safe area, only reached when all checks are OK
   digitalWrite(RELAY_PIN, HIGH);
-
   delay(4000);
 }
 
