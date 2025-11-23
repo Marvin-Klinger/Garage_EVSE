@@ -13,14 +13,22 @@
 #define MAX_V_DIFF 120      //mV difference between min and max cell
 
 
+// --- States for state machine  --- //
+#define IDLE 1    //Ready to charge, started
+#define CHARGE 3  //Relay on, SOC & Vdiff OK
+#define OFF 4     //Charging temporarily suspended (low SOC but otherwise fine)
+#define LOCKOUT 5 //Error, init failed, retried to often
+
 #define COLORED     0
 #define UNCOLORED   1
 
 #define BMS_SERIAL Serial2
 Daly_BMS_UART bms(BMS_SERIAL);
-#define MAX_NUMBER_OF_DATA_LOSS 3
+#define MAX_NUMBER_OF_DATA_LOSS 5
 
 #define RELAY_PIN CONTROLLINO_SCREW_TERMINAL_DIGITAL_OUT_07
+#define ERROR_LED CONTROLLINO_SCREW_TERMINAL_DIGITAL_OUT_06
+char error_led_state = LOW;
 
 #define YZERO 64
 #define HEIGHT 127
@@ -44,6 +52,12 @@ char min_volt_string[10]; // = {'3', '.', '2', '4', '4', 'V', '\0'};
 char max_volt_string[10];
 char volt_diff[10];
 
+void error_led(int delay_time){
+  digitalWrite(ERROR_LED, error_led_state);
+  error_led_state = !error_led_state;
+  delay(delay_time);
+}
+
 void setup() {
   bms_data_drop_number = 0;
   Serial.begin(115200);
@@ -51,28 +65,32 @@ void setup() {
 
   pinMode(RELAY_PIN, OUTPUT);
   digitalWrite(RELAY_PIN, LOW);
-  delay(1000);
+  pinMode(ERROR_LED, OUTPUT);
+  digitalWrite(ERROR_LED, LOW);
 
   while(!bms.Init()){
     Serial.println("BMS not connected");
-    delay(100);
+    error_led(100);
   }
   while(!bms.update()){
     Serial.println("BMS not connected");
-    delay(100);
+    error_led(100);
   }
 
   while(epd.Init() != 0) {
     Serial.print("e-Paper init failed");
-    delay(100);
+    error_led(100);
   }
+
   epd.ClearFrameMemory(0xFF);   // bit set = white, bit reset = black
   epd.DisplayFrame();
+  epd.ClearFrameMemory(0xFF);   // bit set = white, bit reset = black
+  epd.DisplayFrame();
+
   Serial.println("Setup complete");
 }
 
 void loop(){
-  //get update from the BMS
   while (!bms.update()){
     bms_data_drop_number++;
     Serial.println("BMS connection drop");
@@ -81,16 +99,14 @@ void loop(){
       // Turn off the relay, when the connection was dropped to often
       digitalWrite(RELAY_PIN, LOW);
       Serial.println("BMS connection error");
-      delay(100);
-
-      return;
+      while (1){
+        error_led(100);
+      }
+      
       // bms connection error, vals cannot be trusted!
       // TODO deal with problematic vals and try to reconnect or shut down
     }
   }
-  //} else {
-  //  bms_data_drop_number = 0;
-  //}
 
   sprintf(curr_string, "%d A", round(bms.get.packCurrent));
   sprintf(soc_string, "%d %%", round(bms.get.packSOC));
@@ -130,10 +146,16 @@ void loop(){
   //  Serial.println("Cell voltage:      " + (String)bms.get.cellVmV[i]);
   //}
 
+  if (bms.get.packSOC > 100)
+  {
+    Serial.println("[ERROR] Pack SOC over 100%");
+  }
+  
+
   if ((bms.get.minCellmV < MIN_CELL_MV) || (bms.get.packSOC < MIN_SOC))
   {
     digitalWrite(RELAY_PIN, LOW);
-    Serial.println("Empty");
+    Serial.println("[OFF] Empty");
     while(true){
       delay(100);
     }
@@ -141,14 +163,15 @@ void loop(){
 
   if((bms.get.maxCellmV - bms.get.minCellmV) > MAX_V_DIFF){
     digitalWrite(RELAY_PIN, LOW);
-    Serial.println("Vdiff too high");
+    Serial.println("[OFF] Vdiff too high");
     while(true){
-      delay(100);
+      error_led(100);
     }
   }
 
   //Safe area, only reached when all checks are OK
   digitalWrite(RELAY_PIN, HIGH);
+  Serial.println("[ON] Relay on");
   delay(4000);
 }
 
