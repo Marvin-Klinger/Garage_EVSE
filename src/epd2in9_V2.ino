@@ -8,8 +8,8 @@
 #define MIN_SOC 20.0
 #define MIN_VOLTAGE 24.0
 #define MAX_DSCH_I 90.0
-#define SAFETY_TIMER 43200  //12h in seconds
-#define MIN_CELL_MV 2700    //2500mV is absolute min
+#define SAFETY_TIMER 25200000  //7h in milliseconds
+#define MIN_CELL_MV 2700    //2500mV is absolute min, not yet implemented
 #define MAX_V_DIFF 120      //mV difference between min and max cell
 
 
@@ -24,7 +24,7 @@
 
 #define BMS_SERIAL Serial2
 Daly_BMS_UART bms(BMS_SERIAL);
-#define MAX_NUMBER_OF_DATA_LOSS 5
+#define MAX_NUMBER_OF_DATA_LOSS 10
 
 #define RELAY_PIN CONTROLLINO_SCREW_TERMINAL_DIGITAL_OUT_07
 #define ERROR_LED CONTROLLINO_SCREW_TERMINAL_DIGITAL_OUT_06
@@ -42,7 +42,7 @@ Epd epd;
 unsigned long time_start_ms;
 unsigned long time_now_s;
 
-char status_string[10];   // = {'e', 'r', 'r', 'o', 'r', '\0'};
+char status_string[20];   // = {'e', 'r', 'r', 'o', 'r', '\0'};
 char soc_string[10];      // = {'1', '0', '0', '%', '\0'};
 char curr_string[10];     // = {'+', 'X', 'X', '.', 'X', ' ', 'A', '\0'};
 
@@ -63,6 +63,17 @@ void setup() {
   Serial.begin(115200);
   Serial.println("Setup");
 
+  while(epd.Init() != 0) {
+    Serial.print("e-Paper init failed");
+    error_led(100);
+  }
+
+  epd.ClearFrameMemory(0xFF);   // bit set = white, bit reset = black
+  epd.DisplayFrame();
+  delay(100);
+  epd.ClearFrameMemory(0xFF);   // bit set = white, bit reset = black
+  epd.DisplayFrame();
+
   pinMode(RELAY_PIN, OUTPUT);
   digitalWrite(RELAY_PIN, LOW);
   pinMode(ERROR_LED, OUTPUT);
@@ -71,34 +82,66 @@ void setup() {
   while(!bms.Init()){
     Serial.println("BMS not connected");
     error_led(100);
+    bms_data_drop_number++;
+    if (bms_data_drop_number > MAX_NUMBER_OF_DATA_LOSS){
+      while (1)
+      {
+        error_led(100);
+      } 
+    }
   }
+  bms_data_drop_number = 0;
+  
   while(!bms.update()){
     Serial.println("BMS not connected");
-    error_led(100);
+    error_led(500);
+    bms_data_drop_number++;
+    if (bms_data_drop_number > MAX_NUMBER_OF_DATA_LOSS){
+      while (1)
+      {
+        error_led(100);
+      } 
+    }
   }
-
-  while(epd.Init() != 0) {
-    Serial.print("e-Paper init failed");
-    error_led(100);
-  }
-
-  epd.ClearFrameMemory(0xFF);   // bit set = white, bit reset = black
-  epd.DisplayFrame();
-  epd.ClearFrameMemory(0xFF);   // bit set = white, bit reset = black
-  epd.DisplayFrame();
+  bms_data_drop_number = 0;
 
   Serial.println("Setup complete");
+  sprintf(status_string, "setup ok");
+  paint.SetRotate(ROTATE_180);
+  paint.SetWidth(128);
+  paint.SetHeight(64);
+  paint.Clear(COLORED);
+  paint.DrawStringAt(4, 4, status_string, &Font12, UNCOLORED);
+  epd.SetFrameMemory_Partial(paint.GetImage(), 0, 64, paint.GetWidth(), paint.GetHeight());
+  epd.DisplayFrame_Partial();
+  delay(100);
+  epd.SetFrameMemory_Partial(paint.GetImage(), 0, 64, paint.GetWidth(), paint.GetHeight());
+  epd.DisplayFrame_Partial();
 }
+
 
 void loop(){
   while (!bms.update()){
     bms_data_drop_number++;
     Serial.println("BMS connection drop");
+    delay(1000);
 
     if (bms_data_drop_number > MAX_NUMBER_OF_DATA_LOSS){
       // Turn off the relay, when the connection was dropped to often
       digitalWrite(RELAY_PIN, LOW);
       Serial.println("BMS connection error");
+      sprintf(status_string, "BMS connex err");
+      paint.SetRotate(ROTATE_180);
+      paint.SetWidth(128);
+      paint.SetHeight(64);
+      paint.Clear(COLORED);
+      paint.DrawStringAt(4, 4+48, status_string, &Font12, UNCOLORED);
+      epd.SetFrameMemory_Partial(paint.GetImage(), 0, 64, paint.GetWidth(), paint.GetHeight());
+      epd.DisplayFrame_Partial();
+      delay(100);
+      epd.SetFrameMemory_Partial(paint.GetImage(), 0, 64, paint.GetWidth(), paint.GetHeight());
+      epd.DisplayFrame_Partial();
+
       while (1){
         error_led(100);
       }
@@ -107,6 +150,7 @@ void loop(){
       // TODO deal with problematic vals and try to reconnect or shut down
     }
   }
+  bms_data_drop_number = 0;
 
   sprintf(curr_string, "%d A", round(bms.get.packCurrent));
   sprintf(soc_string, "%d %%", round(bms.get.packSOC));
@@ -151,21 +195,71 @@ void loop(){
     Serial.println("[ERROR] Pack SOC over 100%");
   }
   
+  if (millis() > SAFETY_TIMER){
+    //Timer ran out, shut down for safety - the car must be fully charged by this point
+    digitalWrite(RELAY_PIN, LOW);
+    Serial.println("[OFF] Empty");
+    digitalWrite(RELAY_PIN, LOW);
+
+    sprintf(status_string, "Timer");
+    paint.SetRotate(ROTATE_180);
+    paint.SetWidth(128);
+    paint.SetHeight(64);
+    paint.Clear(COLORED);
+    paint.DrawStringAt(4, 4+48, status_string, &Font12, UNCOLORED);
+    epd.SetFrameMemory_Partial(paint.GetImage(), 0, 64, paint.GetWidth(), paint.GetHeight());
+    epd.DisplayFrame_Partial();
+    delay(100);
+    epd.SetFrameMemory_Partial(paint.GetImage(), 0, 64, paint.GetWidth(), paint.GetHeight());
+    epd.DisplayFrame_Partial();
+
+    while(true){
+      error_led(1000);
+    }
+  }
+  
 
   if ((bms.get.minCellmV < MIN_CELL_MV) || (bms.get.packSOC < MIN_SOC))
   {
     digitalWrite(RELAY_PIN, LOW);
     Serial.println("[OFF] Empty");
+
+    sprintf(status_string, "Batt empty");
+    paint.SetRotate(ROTATE_180);
+    paint.SetWidth(128);
+    paint.SetHeight(64);
+    paint.Clear(COLORED);
+    paint.DrawStringAt(4, 4+48, status_string, &Font12, UNCOLORED);
+    epd.SetFrameMemory_Partial(paint.GetImage(), 0, 64, paint.GetWidth(), paint.GetHeight());
+    epd.DisplayFrame_Partial();
+    delay(100);
+    epd.SetFrameMemory_Partial(paint.GetImage(), 0, 64, paint.GetWidth(), paint.GetHeight());
+    epd.DisplayFrame_Partial();
+
     while(true){
-      delay(100);
+      delay(1000);
     }
   }
 
-  if((bms.get.maxCellmV - bms.get.minCellmV) > MAX_V_DIFF){
+  if(((bms.get.maxCellmV - bms.get.minCellmV) > MAX_V_DIFF ) && (bms.get.packVoltage < 26.4)){
+    // high voltage imbalance is purposefuly excluded here, as this is not due to overdischarge
     digitalWrite(RELAY_PIN, LOW);
     Serial.println("[OFF] Vdiff too high");
+
+    sprintf(status_string, "Vdiff=%dmV", round(bms.get.maxCellmV - bms.get.minCellmV));
+    paint.SetRotate(ROTATE_180);
+    paint.SetWidth(128);
+    paint.SetHeight(64);
+    paint.Clear(COLORED);
+    paint.DrawStringAt(4, 4+48, status_string, &Font12, UNCOLORED);
+    epd.SetFrameMemory_Partial(paint.GetImage(), 0, 64, paint.GetWidth(), paint.GetHeight());
+    epd.DisplayFrame_Partial();
+    delay(100);
+    epd.SetFrameMemory_Partial(paint.GetImage(), 0, 64, paint.GetWidth(), paint.GetHeight());
+    epd.DisplayFrame_Partial();
+
     while(true){
-      error_led(100);
+      error_led(1000);
     }
   }
 
