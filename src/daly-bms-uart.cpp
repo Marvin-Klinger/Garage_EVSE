@@ -2,7 +2,7 @@
 #include "daly-bms-uart.h"
 
 // Uncomment the below define to enable debug printing
-// #define DEBUG_SERIAL Serial
+#define DEBUG_SERIAL Serial
 
 //----------------------------------------------------------------------
 // Public Functions
@@ -17,7 +17,7 @@ bool Daly_BMS_UART::Init()
 {
 #ifdef DEBUG_SERIAL
     // Initialize debug serial interface
-    DEBUG_SERIAL.begin(9600);
+    DEBUG_SERIAL.begin(115200);
 #endif
 
     // Null check the serial interface
@@ -42,6 +42,7 @@ bool Daly_BMS_UART::Init()
     {
         this->my_txBuffer[i] = 0x00;
     }
+    DEBUG_SERIAL.println("Init ok");
 
     return true;
 }

@@ -5,9 +5,9 @@
 #include "imagedata.h"
 #include "daly-bms-uart.h"
 
-#define MIN_SOC 20.0
-#define MIN_VOLTAGE 24.0
-#define MAX_DSCH_I 90.0
+#define MIN_SOC 20.0        //  Stop charge and shutdown when this is reached
+//#define MIN_VOLTAGE 24.0      Not currently implemented   
+//#define MAX_DSCH_I 90.0   //  Not currently implemented
 #define SAFETY_TIMER 25200000  //7h in milliseconds
 #define MIN_CELL_MV 2700    //2500mV is absolute min, not yet implemented
 #define MAX_V_DIFF 120      //mV difference between min and max cell
@@ -27,6 +27,7 @@ Daly_BMS_UART bms(BMS_SERIAL);
 #define MAX_NUMBER_OF_DATA_LOSS 10
 
 #define RELAY_PIN CONTROLLINO_SCREW_TERMINAL_DIGITAL_OUT_07
+#define AC_ENABLE CONTROLLINO_RELAY_01
 #define ERROR_LED CONTROLLINO_SCREW_TERMINAL_DIGITAL_OUT_06
 char error_led_state = LOW;
 
@@ -53,13 +54,34 @@ char max_volt_string[10];
 char volt_diff[10];
 
 void error_led(int delay_time){
+  int max_number_of_blinks = 100;
   digitalWrite(ERROR_LED, error_led_state);
   error_led_state = !error_led_state;
   delay(delay_time);
+
+  // shutdown if max number of iterations is reached
+  if (--max_number_of_blinks = 0){
+    // stop charging (should already have been stopped anyways)
+    digitalWrite(RELAY_PIN, LOW);
+    digitalWrite(AC_ENABLE, LOW);
+  }
 }
 
 void setup() {
+  // configure the holding relay first
+  pinMode(AC_ENABLE, OUTPUT);
+  digitalWrite(AC_ENABLE, HIGH);
+
+  // configure charging relay
+  pinMode(RELAY_PIN, OUTPUT);
+  digitalWrite(RELAY_PIN, LOW);
+
+  // configure error LED
+  pinMode(ERROR_LED, OUTPUT);
+  digitalWrite(ERROR_LED, LOW);
+
   bms_data_drop_number = 0;
+
   Serial.begin(115200);
   Serial.println("Setup");
 
@@ -74,15 +96,11 @@ void setup() {
   epd.ClearFrameMemory(0xFF);   // bit set = white, bit reset = black
   epd.DisplayFrame();
 
-  pinMode(RELAY_PIN, OUTPUT);
-  digitalWrite(RELAY_PIN, LOW);
-  pinMode(ERROR_LED, OUTPUT);
-  digitalWrite(ERROR_LED, LOW);
-
   while(!bms.Init()){
     Serial.println("BMS not connected");
     error_led(100);
     bms_data_drop_number++;
+    delay(1000);
     if (bms_data_drop_number > MAX_NUMBER_OF_DATA_LOSS){
       while (1)
       {
@@ -90,11 +108,11 @@ void setup() {
       } 
     }
   }
-  bms_data_drop_number = 0;
+  //bms_data_drop_number = 0;
   
   while(!bms.update()){
-    Serial.println("BMS not connected");
-    error_led(500);
+    Serial.println("BMS update fail");
+    error_led(1000);
     bms_data_drop_number++;
     if (bms_data_drop_number > MAX_NUMBER_OF_DATA_LOSS){
       while (1)
@@ -103,9 +121,10 @@ void setup() {
       } 
     }
   }
-  bms_data_drop_number = 0;
+  //bms_data_drop_number = 0;
 
   Serial.println("Setup complete");
+  
   sprintf(status_string, "setup ok");
   paint.SetRotate(ROTATE_180);
   paint.SetWidth(128);
@@ -150,7 +169,7 @@ void loop(){
       // TODO deal with problematic vals and try to reconnect or shut down
     }
   }
-  bms_data_drop_number = 0;
+  bms_data_drop_number = 0; // Reset the number of dropped msgs after one successful msg decode
 
   sprintf(curr_string, "%d A", round(bms.get.packCurrent));
   sprintf(soc_string, "%d %%", round(bms.get.packSOC));
@@ -199,7 +218,6 @@ void loop(){
     //Timer ran out, shut down for safety - the car must be fully charged by this point
     digitalWrite(RELAY_PIN, LOW);
     Serial.println("[OFF] Empty");
-    digitalWrite(RELAY_PIN, LOW);
 
     sprintf(status_string, "Timer");
     paint.SetRotate(ROTATE_180);
@@ -236,6 +254,8 @@ void loop(){
     epd.SetFrameMemory_Partial(paint.GetImage(), 0, 64, paint.GetWidth(), paint.GetHeight());
     epd.DisplayFrame_Partial();
 
+    //delay(10000);
+
     while(true){
       delay(1000);
     }
@@ -243,6 +263,7 @@ void loop(){
 
   if(((bms.get.maxCellmV - bms.get.minCellmV) > MAX_V_DIFF ) && (bms.get.packVoltage < 26.4)){
     // high voltage imbalance is purposefuly excluded here, as this is not due to overdischarge
+    //  and will be improved by discharging
     digitalWrite(RELAY_PIN, LOW);
     Serial.println("[OFF] Vdiff too high");
 
